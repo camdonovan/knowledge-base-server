@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, writeFileSync, unlinkSync, globSync } from 'fs';
+import { existsSync, writeFileSync, unlinkSync, readdirSync } from 'fs';
 import { homedir } from 'os';
 
 import { PID_PATH } from './paths.js';
@@ -45,10 +45,16 @@ export async function start() {
     console.log('First run — auto-ingesting existing knowledge base...');
     const home = homedir();
     const dirs = [join(home, 'knowledgebase')];
-    // Add Claude memory dirs
+    // Add Claude memory dirs (~/.claude/projects/*/memory)
     try {
-      const memoryDirs = globSync(join(home, '.claude/projects/*/memory'));
-      dirs.push(...memoryDirs);
+      const projectsDir = join(home, '.claude/projects');
+      if (existsSync(projectsDir)) {
+        for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            dirs.push(join(projectsDir, entry.name, 'memory'));
+          }
+        }
+      }
     } catch {}
     for (const dir of dirs) {
       if (existsSync(dir)) {
