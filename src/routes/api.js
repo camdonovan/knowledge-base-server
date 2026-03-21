@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { writeFileSync, unlinkSync, existsSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { join, resolve } from 'path';
+import { tmpdir, homedir } from 'os';
 import { randomBytes } from 'crypto';
 
 import { authMiddleware } from '../auth.js';
@@ -121,14 +121,40 @@ router.delete('/api/documents/:id', (req, res) => {
 // POST /api/ingest-directory
 router.post('/api/ingest-directory', async (req, res) => {
   try {
+    // CSRF protection: if an Origin header is present (browser request), it must
+    // match this server's own host. Requests without Origin (curl, MCP) pass through.
+    const origin = req.headers['origin'];
+    if (origin) {
+      const host = req.headers['host'];
+      const port = process.env.KB_PORT || '3838';
+      const allowed = [
+        `http://${host}`,
+        `https://${host}`,
+        `http://localhost:${port}`,
+        `http://127.0.0.1:${port}`,
+      ];
+      if (!allowed.includes(origin)) {
+        return res.status(403).json({ error: 'Cross-origin requests not permitted for this endpoint' });
+      }
+    }
+
     const { path: dirPath } = req.body || {};
     if (!dirPath) {
       return res.status(400).json({ error: 'path is required' });
     }
-    if (!existsSync(dirPath)) {
-      return res.status(400).json({ error: `Path not found: ${dirPath}` });
+
+    // Resolve symlinks/traversal sequences and restrict to an allowed root.
+    // KB_ALLOWED_DIR overrides the default (user home directory).
+    const resolvedPath = resolve(dirPath);
+    const allowedRoot = resolve(process.env.KB_ALLOWED_DIR || homedir());
+    if (!resolvedPath.startsWith(allowedRoot + '/') && resolvedPath !== allowedRoot) {
+      return res.status(403).json({ error: `Path must be within allowed directory: ${allowedRoot}` });
     }
-    const result = await ingestDirectory(dirPath);
+
+    if (!existsSync(resolvedPath)) {
+      return res.status(400).json({ error: `Path not found: ${resolvedPath}` });
+    }
+    const result = await ingestDirectory(resolvedPath);
     return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: err.message });

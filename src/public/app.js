@@ -195,11 +195,12 @@ function renderDocumentList(docs) {
     tr.dataset.id = d.id;
     tr.style.cursor = 'pointer';
 
-    // Title cell - may contain FTS snippet HTML with <mark> tags
+    // Title cell - may contain FTS snippet with <mark> highlights
     const tdTitle = document.createElement('td');
     if (isSearch && d.snippet) {
-      // Snippet comes from FTS with <mark> highlights - trusted server content
-      tdTitle.innerHTML = d.snippet;
+      // Build snippet safely: split on <mark>…</mark> and reconstruct via DOM
+      // so ingested HTML is never executed.
+      appendSnippet(tdTitle, d.snippet);
     } else {
       tdTitle.textContent = d.title;
     }
@@ -324,6 +325,24 @@ document.getElementById('password-form').addEventListener('submit', async (e) =>
 });
 
 // --- Helpers ---
+
+// Safely render a FTS snippet that may contain <mark>…</mark> tags.
+// All text outside/inside marks is set via textContent — no HTML is ever parsed.
+function appendSnippet(el, snippet) {
+  // Match only the specific <mark>…</mark> pattern the server produces.
+  const parts = snippet.split(/(<mark>[^<]*<\/mark>)/);
+  for (const part of parts) {
+    const m = part.match(/^<mark>([^<]*)<\/mark>$/);
+    if (m) {
+      const mark = document.createElement('mark');
+      mark.textContent = m[1];
+      el.appendChild(mark);
+    } else {
+      el.appendChild(document.createTextNode(part));
+    }
+  }
+}
+
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';

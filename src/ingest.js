@@ -22,11 +22,23 @@ const TYPE_MAP = {
   '.avi': 'video', '.mkv': 'video',
 };
 
+const PDF_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+const PDF_PARSE_TIMEOUT_MS = 30_000;   // 30 s
+
 async function extractPdfContent(filePath, filename) {
   try {
+    const stat = statSync(filePath);
+    if (stat.size > PDF_MAX_BYTES) {
+      return `[pdf file: ${filename}] Skipped: file exceeds ${PDF_MAX_BYTES / 1024 / 1024} MB size limit`;
+    }
+
     const pdfParse = (await import('pdf-parse')).default;
     const buffer = readFileSync(filePath);
-    const data = await pdfParse(buffer);
+
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('PDF parsing timed out after 30 s')), PDF_PARSE_TIMEOUT_MS)
+    );
+    const data = await Promise.race([pdfParse(buffer), timeout]);
     return data.text;
   } catch (err) {
     return `[pdf file: ${filename}] Could not extract text: ${err.message}`;
