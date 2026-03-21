@@ -1,0 +1,20 @@
+[Unit]
+Description=Knowledge Base Server
+After=network.target
+
+[Service]
+Type=simple
+User=cdonovan
+WorkingDirectory=/home/cdonovan/knowledge-base-server
+EnvironmentFile=/home/cdonovan/knowledge-base-server/.env
+ExecStart=/home/cdonovan/.nvm/versions/node/v20.20.1/bin/node bin/kb.js start
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=5
+ReadWritePaths=/home/cdonovan/.knowledge-base /home/cdonovan/knowledge-base-server /tmp
+ProtectSystem=strict
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
