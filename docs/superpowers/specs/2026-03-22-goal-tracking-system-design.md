@@ -1,6 +1,6 @@
 # Goal Tracking & Todo Management System — Design Spec
 **Date:** 2026-03-22
-**Status:** Approved
+**Status:** Approved (post spec review)
 
 ---
 
@@ -110,7 +110,7 @@ Self-referential hierarchy: weekly → monthly → quarterly → yearly → life
 |--------|------|-------|
 | id | UUID PK | |
 | goal_id | UUID FK → goals | |
-| review_id | UUID FK → reviews | |
+| review_id | UUID FK → reviews | NULL if recorded outside a formal review |
 | pct_complete | INT (0–100) | |
 | progress_note | TEXT | |
 | created_at | TIMESTAMPTZ | |
@@ -119,7 +119,7 @@ Self-referential hierarchy: weekly → monthly → quarterly → yearly → life
 | Column | Type | Notes |
 |--------|------|-------|
 | id | UUID PK | |
-| type | ENUM(daily,weekly,monthly,yearly) | |
+| type | ENUM(daily,weekly,monthly,yearly) | No quarterly review loop exists by design — quarterly goals are reviewed as part of monthly reviews |
 | review_date | DATE NOT NULL | |
 | obsidian_path | TEXT | Path to the Obsidian note |
 | summary | TEXT | |
@@ -137,7 +137,9 @@ Self-referential hierarchy: weekly → monthly → quarterly → yearly → life
 | completed | BOOL | |
 | due_date | TIMESTAMPTZ | |
 | snapshotted_at | TIMESTAMPTZ | |
-| overdue_follow_up_at | TIMESTAMPTZ | Set by monitor when task goes overdue |
+| first_nudge_sent_at | TIMESTAMPTZ | Set when initial overdue nudge is sent; prevents re-firing on every 5-min poll |
+| overdue_follow_up_at | TIMESTAMPTZ | Set by monitor after "still on it" response; drives subsequent nudge timing |
+| push_count | INT DEFAULT 0 | Incremented on each "push back" response; triggers blunt escalation at ≥ 3 |
 
 ### `journal_entries`
 | Column | Type | Notes |
@@ -158,7 +160,7 @@ Self-referential hierarchy: weekly → monthly → quarterly → yearly → life
 1. **Theme extraction** — Claude reads `/home/cdonovan/notes.txt` and groups content into themes: flow philosophy, physical health, scheduling principles, financial ideals, habits, mindset
 2. **Interactive review** — Claude presents each theme in the terminal. User accepts, rejects, or modifies. Anything unclear gets a follow-up question. Nothing is adopted without explicit approval
 3. **Synthesis** — Approved content written to `~/obsidian-vault/meta/values-and-principles.md` and ingested into KB with tag `core-context`
-4. **First goal setup** — Immediately runs first yearly + monthly goal-setting session in the terminal using the values doc as context. Sets 2026 yearly goals (one+ per wealth pillar) and current month goals. Cascades into RDS
+4. **First goal setup** — Immediately runs first yearly + monthly goal-setting session in the terminal using the values doc as context. Sets current year's yearly goals (one+ per wealth pillar) and current month goals. Cascades into RDS
 
 The values & principles doc is the persistent context pulled at the start of every review going forward via `kb_search("core-context")`.
 
@@ -171,7 +173,7 @@ The values & principles doc is the persistent context pulled at the start of eve
 | Step | What happens |
 |------|-------------|
 | 1. Data sync | Silent. goal-service pulls TickTick tasks for today, RDS goal stack, last 7 days of reviews from KB, mood/energy trend |
-| 2. Status updates | Telegram. For each incomplete task: "Done, still on it, or push back?" Updates TickTick + todo_snapshots |
+| 2. Status updates | Telegram. For each task due today or overdue (not all open tasks): "Done, still on it, or push back?" Updates TickTick + todo_snapshots |
 | 3. Journal | Telegram. Free time activities, mood (1–10), energy (1–10), anything else worth noting. Saved to journal_entries |
 | 4. Briefing | Telegram. Claude's proactive analysis: goal alignment, drift flags, wins, blunt observations, proposed tomorrow plan with top 3 goal-directed tasks |
 | 5. Approve + lock in | Telegram hybrid discussion. User pushes back → Claude adjusts → approval → goal-service creates TickTick tasks + writes Obsidian daily note + saves review to RDS + ingests to KB |
@@ -183,6 +185,7 @@ The values & principles doc is the persistent context pulled at the start of eve
 - Look ahead 2 weeks
 - Set top 3 outcomes for next week
 - Goal flywheel check: does weekly → monthly still align?
+- Saves weekly review note to Obsidian + RDS + ingests to KB
 
 ### Monthly Review — Last day of month
 - Summarizes all weekly reviews
@@ -192,15 +195,16 @@ The values & principles doc is the persistent context pulled at the start of eve
 - Patterns Claude noticed across the month
 - Set next month's goals
 - Goal flywheel check: monthly → quarterly alignment
+- Saves monthly review note to Obsidian + RDS + ingests to KB
 
 ### Yearly Review — January 1st
 - Full year retrospective by wealth pillar
-- Pulls values & principles doc from KB for alignment check
+- Pulls values & principles doc from KB for alignment check (does NOT re-run notes.txt review — that is initial setup only)
 - Sets new yearly goals per pillar
 - Cascades: yearly → quarterly → monthly
 - Updates lifelong_ideals in RDS if values have shifted
 - Bezos flywheel check: do goals compound and fuel each other?
-- Full goal stack saved to Obsidian + RDS
+- Full goal stack saved to Obsidian + RDS + ingests to KB
 
 ---
 
@@ -284,9 +288,14 @@ goal_ids: ["uuid-yearly", "uuid-monthly", "uuid-weekly"]
 |------|----------|-------|
 | Nightly review | `30 20 * * *` (America/Los_Angeles) | `nightly-review` |
 | Weekly review | `0 9 * * 6` (America/Los_Angeles) | `weekly-review` |
-| Monthly review | `0 9 L * *` (last day, America/Los_Angeles) | `monthly-review` |
-| Yearly review | `0 9 1 1 *` (America/Los_Angeles) | `yearly-review` |
+| Monthly review | `0 9 28-31 * *` (America/Los_Angeles) | `monthly-review` |
+| Yearly review | `0 10 1 1 *` (America/Los_Angeles) | `yearly-review` |
 | Todo monitor | `*/5 * * * *` | `todo-monitor` |
+
+**Cron implementation notes:**
+- The `L` (last day of month) modifier is not supported in standard POSIX cron. The monthly review cron fires on days 28–31; the `monthly-review` skill checks at runtime whether today is actually the last day of the month and exits early if not. This handles all month lengths correctly.
+- The yearly review fires at **10am PT** (not 9am) to avoid collision with the weekly review cron on years when Jan 1 falls on a Saturday. If both fire, the weekly runs first at 9am and the yearly at 10am, each independently.
+- All times are America/Los_Angeles (Pacific Time, DST-aware).
 
 ---
 
